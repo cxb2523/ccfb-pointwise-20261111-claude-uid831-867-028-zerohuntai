@@ -172,3 +172,9 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# ZeroHuntAI runtime artifacts
+rules/custom_rules.yaml.lock
+uploads/
+output/
+logs/

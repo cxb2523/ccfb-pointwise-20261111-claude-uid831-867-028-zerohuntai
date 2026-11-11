@@ -20,6 +20,11 @@ from werkzeug.utils import secure_filename
 
 from scanner.local_scanner import LocalScanner
 from scanner.github_scanner import GitHubScanner
+from scanner.rule_store import (
+    get_rule_store,
+    RuleValidationError,
+    BuiltinRuleError,
+)
 from utils.logger import setup_logger, get_logger
 
 # Set up the logger
@@ -192,13 +197,15 @@ def scan():
         # Store scan results summary in session
         session['scan_summary'] = {
             'total_files': scan_result['stats']['total_files'],
+            'critical_severity': scan_result['stats'].get('critical_severity', 0),
             'high_severity': scan_result['stats']['high_severity'],
             'medium_severity': scan_result['stats']['medium_severity'],
             'low_severity': scan_result['stats']['low_severity'],
             'total_vulnerabilities': (
                 scan_result['stats']['high_severity'] +
                 scan_result['stats']['medium_severity'] +
-                scan_result['stats']['low_severity']
+                scan_result['stats']['low_severity'] +
+                scan_result['stats'].get('critical_severity', 0)
             )
         }
         
@@ -297,8 +304,88 @@ def api_vulnerabilities():
     except Exception as e:
         logger.error(f"Error loading vulnerability details: {str(e)}")
         return jsonify({'error': str(e)}), 500
-    
+
     return jsonify(vulnerabilities)
+
+
+# ----------------------------------------------------------------- rule management
+
+@app.route('/api/rules', methods=['GET'])
+def api_list_rules():
+    """List all rules. Each entry carries 'source': builtin | custom."""
+    rules = get_rule_store().list_rules()
+    return jsonify({'rules': rules, 'total': len(rules)})
+
+
+@app.route('/api/rules', methods=['POST'])
+def api_create_rule():
+    """
+    Create a custom rule.
+
+    Body: {name, pattern (regex), severity, language?, description?, id?, enabled?}
+    The pattern is compiled for validation and severity must be one of
+    critical/high/medium/low; invalid payloads return 400 with the reason.
+    """
+    payload = request.get_json(silent=True)
+    if payload is None:
+        return jsonify({'error': 'request body must be valid JSON'}), 400
+
+    try:
+        rule = get_rule_store().add_rule(payload)
+    except RuleValidationError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    logger.info("Custom rule created via API: %s", rule['id'])
+    return jsonify(rule), 201
+
+
+@app.route('/api/rules/<rule_id>', methods=['PATCH'])
+def api_toggle_rule(rule_id):
+    """
+    Enable/disable a rule via {"enabled": true|false}.
+
+    Built-in rules cannot be modified (403). Unknown ids return 404.
+    """
+    payload = request.get_json(silent=True)
+    if payload is None or 'enabled' not in payload:
+        return jsonify({'error': "request body must be JSON with an 'enabled' boolean"}), 400
+
+    enabled = payload['enabled']
+    if not isinstance(enabled, bool):
+        return jsonify({'error': "'enabled' must be a boolean"}), 400
+
+    store = get_rule_store()
+    try:
+        rule = store.set_enabled(rule_id, enabled)
+    except BuiltinRuleError as exc:
+        return jsonify({'error': str(exc)}), 403
+    except RuleValidationError as exc:
+        return jsonify({'error': str(exc)}), 400
+    except KeyError:
+        return jsonify({'error': f"rule '{rule_id}' not found"}), 404
+
+    logger.info("Rule %s toggled via API: enabled=%s", rule_id, enabled)
+    return jsonify(rule)
+
+
+@app.route('/api/rules/<rule_id>', methods=['DELETE'])
+def api_delete_rule(rule_id):
+    """
+    Delete a custom rule.
+
+    Built-in rules cannot be deleted (403). Unknown ids return 404.
+    """
+    store = get_rule_store()
+    try:
+        removed = store.delete_rule(rule_id)
+    except BuiltinRuleError as exc:
+        return jsonify({'error': str(exc)}), 403
+    except KeyError:
+        return jsonify({'error': f"rule '{rule_id}' not found"}), 404
+
+    logger.info("Custom rule deleted via API: %s", rule_id)
+    return jsonify({'deleted': True, 'rule': removed})
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)

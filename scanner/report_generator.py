@@ -71,14 +71,15 @@ class ReportGenerator:
         
         # Sort vulnerabilities by severity
         vulnerabilities = sorted(
-            scan_result['vulnerabilities'], 
-            key=lambda x: {'High': 0, 'Medium': 1, 'Low': 2}.get(x['severity'], 3)
+            scan_result['vulnerabilities'],
+            key=lambda x: {'Critical': 0, 'High': 1, 'Medium': 2, 'Low': 3}.get(x['severity'], 4)
         )
-        
+
         # Format the vulnerabilities for HTML with JSON data for modal
         vuln_html = ""
         for i, vuln in enumerate(vulnerabilities):
             severity_class = {
+                'Critical': 'table-danger',
                 'High': 'table-danger',
                 'Medium': 'table-warning',
                 'Low': 'table-info'

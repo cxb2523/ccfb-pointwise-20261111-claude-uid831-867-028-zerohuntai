@@ -58,7 +58,18 @@ class LocalScanner:
     def scan(self):
 
         logger.info(f"Starting local scan of directory: {self.directory_path}")
-        
+
+        # Pin the rule snapshot for the whole scan. Rule changes made via the
+        # API while this scan runs (hot reload) take effect only on the next
+        # scan, so findings never mix two rule versions in one report.
+        self.analyzer.begin_scan()
+        try:
+            return self._run_scan()
+        finally:
+            self.analyzer.end_scan()
+
+    def _run_scan(self):
+
         files_to_scan = self._get_files_to_scan()
         total_files = len(files_to_scan)
         logger.info(f"Found {total_files} files to scan")
@@ -93,10 +104,11 @@ class LocalScanner:
                 self._perform_sensitive_data_scan(files_to_scan)
             
         # Calculate statistics
+        critical_sev = sum(1 for vuln in self.vulnerabilities if vuln['severity'] == 'Critical')
         high_sev = sum(1 for vuln in self.vulnerabilities if vuln['severity'] == 'High')
         medium_sev = sum(1 for vuln in self.vulnerabilities if vuln['severity'] == 'Medium')
         low_sev = sum(1 for vuln in self.vulnerabilities if vuln['severity'] == 'Low')
-        
+
         self.scan_result = {
             'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
             'target': self.directory_path,
@@ -104,6 +116,7 @@ class LocalScanner:
             'secrets': self.secrets,
             'stats': {
                 'total_files': self.files_scanned,
+                'critical_severity': critical_sev,
                 'high_severity': high_sev,
                 'medium_severity': medium_sev,
                 'low_severity': low_sev,
